@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+playwright-report/
+test-results/
+
+__pycache__/
+
+.DS_Store
+.env.*
+!.env.example
+*.log
+
+# Keep shipped ephemerides tracked; ignore additional runtime responses.
+data/horizons-cache/*.json
+
+data/geometry-cache/*.json

@@ -1,0 +1,262 @@
+import { test, expect } from "@playwright/test";
+test("real globe, location selection and sourced observation", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator(".globe-canvas canvas")).toBeVisible();
+  await expect(page.getByText("Loading LROC imagery…")).toHaveCount(0);
+  await page.getByRole("button", { name: /LROC observation center/ }).click();
+  await expect(
+    page.getByRole("link", { name: "Inspect original image" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("58.450°S", { exact: false }).first(),
+  ).toBeVisible();
+  await expect(page.locator(".globe-canvas canvas")).toHaveAttribute(
+    "data-camera-settled",
+    "true",
+  );
+  await page.screenshot({ path: "docs/explorer.png", fullPage: true });
+});
+test("Horizons calculation, requirement checks, saving and reload", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Plan this location" }).click();
+  await page.getByRole("button", { name: "Calculate conditions" }).click();
+  await expect(
+    page.getByText("CACHED HORIZONS RESPONSE", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Requirement checks", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: "docs/analysis.png", fullPage: true });
+  await page.getByRole("button", { name: "Save scenario" }).click();
+  await page.reload();
+  await page.getByRole("button", { name: /Compare/ }).click();
+  await expect(page.getByLabel("Select for comparison")).toHaveCount(1);
+});
+test("cached examples compare, rename, export and persist", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open example comparison" }).click();
+  await expect(
+    page.getByText("Operational trade-offs.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Aligned mission conditions" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Rename South polar reference", { exact: true })
+    .fill("Polar option");
+  await page.reload();
+  await page.getByRole("button", { name: /Compare/ }).click();
+  await expect(
+    page.getByLabel("Rename Polar option", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Select for comparison").nth(0).check();
+  await page.getByLabel("Select for comparison").nth(1).check();
+  const pending = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export CSV" }).click();
+  const dl = await pending;
+  expect(dl.suggestedFilename()).toBe("lunarsight-comparison.csv");
+  await page.screenshot({ path: "docs/comparison.png", fullPage: true });
+});
+test("service failure is explicit and no replacement results appear", async ({
+  page,
+}) => {
+  await page.route("**/api/analyze", (route) =>
+    route.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: { message: "Horizons is unavailable. Try again." },
+      }),
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Plan this location" }).click();
+  await page.getByRole("button", { name: "Calculate conditions" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Horizons is unavailable",
+  );
+  await expect(
+    page.getByText("Requirement checks", { exact: true }),
+  ).toHaveCount(0);
+});
+test("mobile navigation and comparison have no horizontal overflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.locator(".globe-canvas canvas")).toBeVisible();
+  await expect(page.locator(".globe-canvas canvas")).toHaveAttribute(
+    "data-camera-settled",
+    "true",
+  );
+  await page.screenshot({ path: "docs/mobile.png", fullPage: true });
+  await page.getByRole("button", { name: "Open example comparison" }).click();
+  await expect(
+    page.getByText("Operational trade-offs.", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBeTruthy();
+  await page.getByRole("button", { name: "Sources", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "THE EVIDENCE." }),
+  ).toBeVisible();
+});
+
+test("globe raycast selects real surface coordinates and antipodal focus settles", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const canvas = page.locator(".globe-canvas canvas");
+  await expect(canvas).toHaveAttribute("data-camera-settled", "true");
+  const box = await canvas.boundingBox();
+  if (!box) throw Error("No canvas");
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(
+    page.getByRole("heading", { name: "Custom location" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Farside reference/ }).click();
+  await expect(canvas).toHaveAttribute("data-camera-settled", "true");
+  await expect(
+    page.getByRole("heading", { name: "Farside reference" }),
+  ).toBeVisible();
+});
+test("unavailable WebGL keeps manual mission analysis usable", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    HTMLCanvasElement.prototype.getContext = (() =>
+      null) as typeof HTMLCanvasElement.prototype.getContext;
+  });
+  await page.goto("/");
+  await expect(
+    page.getByText("3D view unavailable.", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Plan this location" }).click();
+  await page.getByRole("button", { name: "Calculate conditions" }).click();
+  await expect(
+    page.getByText("Requirement checks", { exact: true }),
+  ).toBeVisible();
+});
+test("cached examples work without external requests and invalid requirements are rejected", async ({
+  page,
+}) => {
+  await page.route("https://**/*", (r) => r.abort());
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open example comparison" }).click();
+  await expect(
+    page.getByText("Operational trade-offs.", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Analyze/ }).click();
+  await page
+    .getByLabel("Required Sun availability (%)", { exact: true })
+    .fill("101");
+  await page.getByRole("button", { name: "Calculate conditions" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Enter valid mission requirements",
+  );
+});
+
+test("location panel is below the scene and mission date/time carry into analysis", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const scene = await page.locator(".explorer").boundingBox();
+  const panel = await page
+    .getByRole("region", { name: "Location and mission time" })
+    .boundingBox();
+  expect(scene && panel && panel.y >= scene.y + scene.height).toBeTruthy();
+  await page
+    .getByLabel("Mission date (UTC)", { exact: true })
+    .fill("2026-12-05");
+  await page.getByLabel("Mission time (UTC)", { exact: true }).fill("14:30");
+  await page.getByRole("button", { name: "Plan this location" }).click();
+  await expect(
+    page.getByLabel("Start date & time (UTC)", { exact: true }),
+  ).toHaveValue("2026-12-05T14:30");
+});
+
+test("verified historical catalog and archived NAC footprints are selectable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("combobox", { name: "Location category", exact: true })
+    .selectOption("historical");
+  await page.getByRole("button", { name: /Apollo 11 · lunar module/ }).click();
+  await expect(
+    page.getByRole("link", { name: "Verified coordinate source" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Apollo 11 · lunar module" }),
+  ).toBeVisible();
+  await page
+    .getByText("Find LROC NAC image footprints", { exact: true })
+    .click();
+  await page.getByRole("button", { name: "Load archived example" }).click();
+  await expect(
+    page.getByText("12 returned observations", { exact: false }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: /Focus image centre/ })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Custom location" }),
+  ).toBeVisible();
+  await expect(page.locator(".observation.selected")).toHaveCount(1);
+  await page.screenshot({ path: "docs/surface-tools.png", fullPage: true });
+});
+test("map layer coverage and missing tiles are explicit", async ({ page }) => {
+  await page.route("**/api/tile/**", (r) => r.fulfill({ status: 404 }));
+  await page.goto("/");
+  await page
+    .getByText("Local imagery, hillshade & polar layers", { exact: true })
+    .click();
+  await page
+    .getByRole("combobox", { name: "Map layer", exact: true })
+    .selectOption("psr");
+  await expect(
+    page.getByRole("img", {
+      name: "Moon Trek regional map with selected coordinate",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("tile(s) unavailable", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Nearside reference/ }).click();
+  await expect(
+    page.getByText("This layer has no coverage", { exact: false }),
+  ).toBeVisible();
+});
+test("cached solar disk geometry has provenance and does not replace availability", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Plan this location" }).click();
+  await page.getByRole("button", { name: "Calculate conditions" }).click();
+  await expect(
+    page.getByText("Requirement checks", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByText("Solar disk & eclipse screening", { exact: true })
+    .click();
+  await page.getByRole("button", { name: "Open cached disk example" }).click();
+  await expect(
+    page.getByText("MAX SAMPLED SUN OCCULTATION", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("NASA/JPL Horizons quantities 4, 13, 20", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Requirement checks", { exact: true }),
+  ).toBeVisible();
+});
